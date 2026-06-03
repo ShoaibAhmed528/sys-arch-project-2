@@ -352,6 +352,8 @@ abstract class GenericCore(
       8,
       mem_active_mask(2)
     ) ## Fill(8, mem_active_mask(1)) ## Fill(8, mem_active_mask(0)))
+  }.elsewhen(io_rvfi.rvfi_valid) {
+    mem_rdata := 0.U
   }
 
   when(had_mem_req) {
