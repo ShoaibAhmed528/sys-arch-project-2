@@ -17,19 +17,15 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
   // default safe states for all outputs.
   io.valid := false.B
   io.stall := STALL_REASON.NO_STALL
-
   io_pc.pc_we := false.B
   io_pc.pc_wdata := 0.U
-
   io_data.data_req := false.B
   io_data.data_addr := 0.U
   io_data.data_be := 0.U
   io_data.data_we := false.B
   io_data.data_wdata := 0.U
-
   io_trap.trap_valid := false.B
   io_trap.trap_reason := TRAP_REASON.NONE
-
   io_reg.reg_write_en := false.B
   io_reg.reg_write_data := 0.U
 
@@ -93,7 +89,7 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
         rd_addr := base_rd
       }
       is(s_ACCUM_LOW) {
-        rs1_addr := base_rd       // lower half of dest. (even reg)
+        rs1_addr := base_rd // lower half of dest. (even reg)
         rs2_addr := base_rd + 1.U // upper half of dest. (odd reg)
         rd_addr := base_rd
       }
@@ -151,8 +147,12 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
   val rd_h = VecInit.tabulate(2)(i => current_rd_val(i * 16 + 15, i * 16))
 
   // immediates for load instruc.
+
+  //pli.db
   val pli_db_imm = instr(23, 16)
+  //pli.dh
   val pli_dh_imm = Cat(instr(24), instr(23, 15)).asSInt
+  //plui.dh
   val plui_dh_imm = instr(24, 15)
 
   // slice operands into bytes and halfwords.
@@ -260,31 +260,56 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
     }
 
     is(RISCV_TYPE.padd_db) {
-      out_wire := Cat(padd_b_res(3), padd_b_res(2), padd_b_res(1), padd_b_res(0))
+      out_wire := Cat(
+        padd_b_res(3),
+        padd_b_res(2),
+        padd_b_res(1),
+        padd_b_res(0)
+      )
     }
     is(RISCV_TYPE.padd_dh) { out_wire := Cat(padd_h_res(1), padd_h_res(0)) }
     is(RISCV_TYPE.padd_dw) { out_wire := padd_w_res }
 
     is(RISCV_TYPE.padd_dbs) {
-      out_wire := Cat(padd_bs_res(3), padd_bs_res(2), padd_bs_res(1), padd_bs_res(0))
+      out_wire := Cat(
+        padd_bs_res(3),
+        padd_bs_res(2),
+        padd_bs_res(1),
+        padd_bs_res(0)
+      )
     }
     is(RISCV_TYPE.padd_dhs) { out_wire := Cat(padd_hs_res(1), padd_hs_res(0)) }
     is(RISCV_TYPE.padd_dws) { out_wire := padd_ws_res }
 
     is(RISCV_TYPE.psub_db) {
-      out_wire := Cat(psub_b_res(3), psub_b_res(2), psub_b_res(1), psub_b_res(0))
+      out_wire := Cat(
+        psub_b_res(3),
+        psub_b_res(2),
+        psub_b_res(1),
+        psub_b_res(0)
+      )
     }
     is(RISCV_TYPE.psub_dh) { out_wire := Cat(psub_h_res(1), psub_h_res(0)) }
     is(RISCV_TYPE.psub_dw) { out_wire := psub_w_res }
 
     is(RISCV_TYPE.psadd_db) {
-      out_wire := Cat(psadd_b_res(3), psadd_b_res(2), psadd_b_res(1), psadd_b_res(0))
+      out_wire := Cat(
+        psadd_b_res(3),
+        psadd_b_res(2),
+        psadd_b_res(1),
+        psadd_b_res(0)
+      )
     }
     is(RISCV_TYPE.psadd_dh) { out_wire := Cat(psadd_h_res(1), psadd_h_res(0)) }
     is(RISCV_TYPE.psadd_dw) { out_wire := psadd_w_res }
 
     is(RISCV_TYPE.paadd_db) {
-      out_wire := Cat(paadd_b_res(3), paadd_b_res(2), paadd_b_res(1), paadd_b_res(0))
+      out_wire := Cat(
+        paadd_b_res(3),
+        paadd_b_res(2),
+        paadd_b_res(1),
+        paadd_b_res(0)
+      )
     }
     is(RISCV_TYPE.paadd_dh) { out_wire := Cat(paadd_h_res(1), paadd_h_res(0)) }
     is(RISCV_TYPE.paadd_dw) { out_wire := paadd_w_res }
@@ -292,7 +317,9 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
     is(RISCV_TYPE.pwadd_b) { out_wire := Cat(pwadd_b_res(1), pwadd_b_res(0)) }
     is(RISCV_TYPE.pwadd_h) { out_wire := pwadd_h_res }
 
-    is(RISCV_TYPE.pwadda_b) { out_wire := Cat(pwadda_b_res(1), pwadda_b_res(0)) }
+    is(RISCV_TYPE.pwadda_b) {
+      out_wire := Cat(pwadda_b_res(1), pwadda_b_res(0))
+    }
     is(RISCV_TYPE.pwadda_h) { out_wire := pwadda_h_res }
   }
 

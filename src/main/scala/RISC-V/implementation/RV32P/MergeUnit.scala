@@ -16,19 +16,15 @@ class MergeUnit extends AbstractExecutionUnit {
   // default safe states.
   io.valid := false.B
   io.stall := STALL_REASON.NO_STALL
-
   io_pc.pc_we := false.B
   io_pc.pc_wdata := 0.U
-
   io_data.data_req := false.B
   io_data.data_addr := 0.U
   io_data.data_be := 0.U
   io_data.data_we := false.B
   io_data.data_wdata := 0.U
-
   io_trap.trap_valid := false.B
   io_trap.trap_reason := TRAP_REASON.NONE
-
   io_reg.reg_write_en := false.B
   io_reg.reg_write_data := 0.U
   io_reg.reg_rs1 := io.instr(19, 15)
@@ -111,7 +107,7 @@ class MergeUnit extends AbstractExecutionUnit {
         is(RISCV_TYPE.mvmn) { // X[rd] = (~m & X[rs1]) | (m & X[rd])
           out_wire := (~saved_rs2 & saved_rs1) | (saved_rs2 & saved_rd)
         }
-        is(RISCV_TYPE.merge) { // X[rd] = (~d0 & X[rs1]) | (d0 & X[rs2])
+        is(RISCV_TYPE.merge) { // X[rd] = (~d0 & X[rs1]) | (d0 & X[rs2]) 
           out_wire := (saved_rd & saved_rs2) | (~saved_rd & saved_rs1)
         }
       }
