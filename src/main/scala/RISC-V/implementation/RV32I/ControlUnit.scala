@@ -42,116 +42,134 @@ class ControlUnit extends AbstractControlUnit {
         )
       }
     }
-  }.otherwise {
-    switch(RISCV_TYPE.getOP(io_ctrl.instr_type)) {
-      is(RISCV_OP.OP_IMM) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
-        io_ctrl.alu_control := ALU_CONTROL(
-          RISCV_TYPE.getFunct7(io_ctrl.instr_type).asUInt(5) ## RISCV_TYPE
-            .getFunct3(io_ctrl.instr_type)
-            .asUInt
-        )
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+      .otherwise {
+        // gnt not yet received — keep the request alive
+        when(RISCV_TYPE.getOP(io_ctrl.instr_type) === RISCV_OP.LOAD) {
+          io_ctrl.data_req := true.B
+          io_ctrl.data_we := false.B
+          io_ctrl.data_be := Fill(
+            2,
+            RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
+          ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
+            1.W
+          )
+          // re-drive ALU so address stays correct across all delay cycles
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+          stalled := STALL_REASON.EXECUTION_UNIT
+        }
       }
-      is(RISCV_OP.OP) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
-        io_ctrl.alu_control := ALU_CONTROL(
-          RISCV_TYPE.getFunct7(io_ctrl.instr_type).asUInt(5) ## RISCV_TYPE
-            .getFunct3(io_ctrl.instr_type)
-            .asUInt
-        )
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.RS2
-      }
-      is(RISCV_OP.LUI) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.IMM
-      }
-      is(RISCV_OP.AUIPC) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
-        io_ctrl.alu_control := ALU_CONTROL.ADD
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.PC
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
-      }
-      is(RISCV_OP.BRANCH) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := false.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT // don't care
-        io_ctrl.alu_control := ALU_CONTROL(
-          (~RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2)) ## Fill(
-            1,
-            0.U
-          ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2, 1)
-        )
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.RS2
-        io_ctrl.next_pc_select := NEXT_PC_SELECT.BRANCH
-      }
-      is(RISCV_OP.STORE) {
-        stalled := STALL_REASON.EXECUTION_UNIT
-        io_ctrl.alu_control := ALU_CONTROL.ADD
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
-        io_ctrl.reg_we := false.B
-        io_ctrl.data_req := true.B
-        io_ctrl.data_we := true.B
-        io_ctrl.data_be := Fill(
-          2,
-          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
-        ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
-          1.W
-        )
-      }
-      is(RISCV_OP.JAL) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
-        io_ctrl.alu_control := ALU_CONTROL.ADD
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.PC // target = PC + imm
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
-        io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED
-      }
-      is(RISCV_OP.JALR) {
-        stalled := STALL_REASON.NO_STALL
-        io_ctrl.reg_we := true.B
-        io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
-        io_ctrl.alu_control := ALU_CONTROL.ADD
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1 // target = rs1 + imm
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
-        io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED // force bit 0 = 0
-      }
-      is(RISCV_OP.LOAD) {
-        // Address = rs1 + imm  (ALU computes it)
-        io_ctrl.alu_control := ALU_CONTROL.ADD
-        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
-        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
-        io_ctrl.reg_we := false.B // will be set after gnt
-        io_ctrl.data_req := true.B
-        io_ctrl.data_we := false.B
-        // be mask from funct3: lb=0001, lh=0011, lw=1111, lbu=0001, lhu=0011
-        io_ctrl.data_be := Fill(
-          2,
-          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
-        ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
-          1.W
-        )
-        // funct3 bit[2] = 1 means unsigned (lbu=100, lhu=101)
-        io_ctrl.reg_write_sel := Mux(
-          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2),
-          REG_WRITE_SEL.MEM_OUT_ZERO_EXTENDED,
-          REG_WRITE_SEL.MEM_OUT_SIGN_EXTENDED
-        )
-        io_ctrl.next_pc_select := NEXT_PC_SELECT.PC_PLUS_4
-        stalled := STALL_REASON.EXECUTION_UNIT
+  }
+    .otherwise {
+      switch(RISCV_TYPE.getOP(io_ctrl.instr_type)) {
+        is(RISCV_OP.OP_IMM) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
+          io_ctrl.alu_control := ALU_CONTROL(
+            RISCV_TYPE.getFunct7(io_ctrl.instr_type).asUInt(5) ## RISCV_TYPE
+              .getFunct3(io_ctrl.instr_type)
+              .asUInt
+          )
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+        }
+        is(RISCV_OP.OP) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
+          io_ctrl.alu_control := ALU_CONTROL(
+            RISCV_TYPE.getFunct7(io_ctrl.instr_type).asUInt(5) ## RISCV_TYPE
+              .getFunct3(io_ctrl.instr_type)
+              .asUInt
+          )
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.RS2
+        }
+        is(RISCV_OP.LUI) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.IMM
+        }
+        is(RISCV_OP.AUIPC) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.PC
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+        }
+        is(RISCV_OP.BRANCH) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := false.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.ALU_OUT // don't care
+          io_ctrl.alu_control := ALU_CONTROL(
+            (~RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2)) ## Fill(
+              1,
+              0.U
+            ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2, 1)
+          )
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.RS2
+          io_ctrl.next_pc_select := NEXT_PC_SELECT.BRANCH
+        }
+        is(RISCV_OP.STORE) {
+          stalled := STALL_REASON.EXECUTION_UNIT
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+          io_ctrl.reg_we := false.B
+          io_ctrl.data_req := true.B
+          io_ctrl.data_we := true.B
+          io_ctrl.data_be := Fill(
+            2,
+            RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
+          ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
+            1.W
+          )
+        }
+        is(RISCV_OP.JAL) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.PC // target = PC + imm
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+          io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED
+        }
+        is(RISCV_OP.JALR) {
+          stalled := STALL_REASON.NO_STALL
+          io_ctrl.reg_we := true.B
+          io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1 // target = rs1 + imm
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+          io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED // force bit 0 = 0
+        }
+        is(RISCV_OP.LOAD) {
+          // Address = rs1 + imm  (ALU computes it)
+          io_ctrl.alu_control := ALU_CONTROL.ADD
+          io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+          io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+          io_ctrl.reg_we := false.B // will be set after gnt
+          io_ctrl.data_req := true.B
+          io_ctrl.data_we := false.B
+          io_ctrl.data_be := Fill(
+            2,
+            RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
+          ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
+            1.W
+          )
+          // funct3 bit[2] = 1 means unsigned (lbu=100, lhu=101)
+          io_ctrl.reg_write_sel := Mux(
+            RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2),
+            REG_WRITE_SEL.MEM_OUT_ZERO_EXTENDED,
+            REG_WRITE_SEL.MEM_OUT_SIGN_EXTENDED
+          )
+          io_ctrl.next_pc_select := NEXT_PC_SELECT.PC_PLUS_4
+          stalled := STALL_REASON.EXECUTION_UNIT
+        }
       }
     }
-  }
 }

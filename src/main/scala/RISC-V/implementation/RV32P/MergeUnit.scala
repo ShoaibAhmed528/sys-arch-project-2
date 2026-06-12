@@ -107,7 +107,7 @@ class MergeUnit extends AbstractExecutionUnit {
         is(RISCV_TYPE.mvmn) { // X[rd] = (~m & X[rs1]) | (m & X[rd])
           out_wire := (~saved_rs2 & saved_rs1) | (saved_rs2 & saved_rd)
         }
-        is(RISCV_TYPE.merge) { // X[rd] = (~d0 & X[rs1]) | (d0 & X[rs2]) 
+        is(RISCV_TYPE.merge) { // X[rd] = (~d0 & X[rs1]) | (d0 & X[rs2])
           out_wire := (saved_rd & saved_rs2) | (~saved_rd & saved_rs1)
         }
       }

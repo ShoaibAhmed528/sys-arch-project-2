@@ -148,11 +148,11 @@ class DoubleWidthUnit extends AbstractExecutionUnit {
 
   // immediates for load instruc.
 
-  //pli.db
+  // pli.db
   val pli_db_imm = instr(23, 16)
-  //pli.dh
+  // pli.dh
   val pli_dh_imm = Cat(instr(24), instr(23, 15)).asSInt
-  //plui.dh
+  // plui.dh
   val plui_dh_imm = instr(24, 15)
 
   // slice operands into bytes and halfwords.
