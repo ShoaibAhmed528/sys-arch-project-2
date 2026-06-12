@@ -11,16 +11,21 @@ import RISCV.model.RISCV_TYPE
 class ComplexPackedUnit extends AbstractExecutionUnit {
   io.misa := "b01__0000__0_00000_00000_00000_10000_00000".U
 
-  // Claim all ComplexPacked instructions
   val valid_instr = VecInit(InstructionSets.ComplexPacked.map(_.asUInt).toSeq)
   io.valid := valid_instr.contains(io.instr_type.asUInt)
 
-  // Default outputs
+  // 1. Identify clipping instructions upfront for immediate address mapping
+  val is_pnclipi_b =
+    (io.instr_type.asUInt === RISCV_TYPE.pnclipi_b.asUInt) ||
+      (io.instr_type.asUInt === RISCV_TYPE.pnclipri_b.asUInt)
+  val is_pnclipi_h =
+    (io.instr_type.asUInt === RISCV_TYPE.pnclipi_h.asUInt) ||
+      (io.instr_type.asUInt === RISCV_TYPE.pnclipri_h.asUInt)
+
+  // 2. Setup structural defaults
   io.stall := STALL_REASON.NO_STALL
   io_pc.pc_we := false.B
   io_pc.pc_wdata := io_pc.pc + 4.U
-  io_reg.reg_rs1 := io.instr(19, 15)
-  io_reg.reg_rs2 := io.instr(24, 20)
   io_reg.reg_rd := io.instr(11, 7)
   io_reg.reg_write_en := false.B
   io_reg.reg_write_data := 0.U
@@ -32,18 +37,32 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
   io_trap.trap_valid := false.B
   io_trap.trap_reason := TRAP_REASON.NONE
 
+  // 3. Register address mapping (Moved upfront to fix timing and alignment)
+  val encoded_rs1 = io.instr(19, 15)
+  when(is_pnclipi_b || is_pnclipi_h) {
+    val base_rs1 = encoded_rs1(4, 1) ## 0.U(1.W)
+    io_reg.reg_rs1 := base_rs1
+    io_reg.reg_rs2 := base_rs1 + 1.U
+  }.otherwise {
+    io_reg.reg_rs1 := encoded_rs1
+    io_reg.reg_rs2 := io.instr(24, 20)
+  }
+
+  // 4. Safely sample the updated data streams
   val rs1 = io_reg.reg_read_data1
   val rs2 = io_reg.reg_read_data2
 
-  // signed shamt from rs2 low byte (for shift instructions)
-  val sshamt = rs2(7, 0).asSInt
+  // Signed shamt from rs2 low byte (for R-type shift instructions)
+  val shamt_byte = rs2(7, 0) // raw byte
+  val shamt_neg = shamt_byte(7) // sign bit: 1 = negative = right shift
+  // magnitude of shift
+  val shamt_mag = Mux(shamt_neg, (~shamt_byte + 1.U)(7, 0), shamt_byte)(7, 0)
 
-  // shamt immediates
-  val shamt_i5 = io.instr(24, 20)
-  val shamt_i4 = io.instr(23, 20)
+  // Immediate shamts
+  val shamt_i5 = io.instr(24, 20) // 5-bit for pnclipi.h
+  val shamt_i4 = io.instr(23, 20) // 4-bit for pnclipi.b
 
-  // here are the helpers 
-
+  // clip helpers
   def clipS16(x: SInt): UInt = {
     Mux(
       x < (-32768).S,
@@ -51,14 +70,11 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
       Mux(x > 32767.S, 0x7fff.U(16.W), x(15, 0))
     )
   }
-
   def clipU16(x: UInt): UInt =
     Mux(x > 0xffff.U, 0xffff.U(16.W), x(15, 0))
-
   def clipS8(x: SInt): UInt = {
     Mux(x < (-128).S, 0x80.U(8.W), Mux(x > 127.S, 0x7f.U(8.W), x(7, 0)))
   }
-
   def clipS32(x: SInt): UInt = {
     val minV = (-2147483648L).S(65.W)
     val maxV = 2147483647.S(65.W)
@@ -70,69 +86,78 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
     )
   }
 
-  //PSSHA.HS
   val pssha_lanes = VecInit((0 until 2).map { i =>
-    val h = rs1(16 * i + 15, 16 * i).asSInt
+    val h = rs1(16 * i + 15, 16 * i).asSInt // signed 16-bit lane
     val r = Wire(UInt(16.W))
-    when(sshamt < 0.S) {
-      val neg = (-sshamt).asUInt
-      when(neg >= 16.U) { r := Mux(h < 0.S, 0xffff.U, 0.U) }
-        .otherwise { r := (h >> neg).asUInt(15, 0) }
+    when(shamt_neg) {
+      // right shift (arithmetic)
+      when(shamt_mag >= 16.U) {
+        r := Mux(h < 0.S, 0xffff.U, 0.U)
+      }.otherwise {
+        r := (h >> shamt_mag).asUInt(15, 0)
+      }
     }.otherwise {
-      r := clipS16((h.pad(32) << sshamt.asUInt).asSInt)
+      // left shift with saturation
+      r := clipS16((h.pad(32) << shamt_mag).asSInt)
     }
     r
   })
   val pssha_result = pssha_lanes(1) ## pssha_lanes(0)
 
-  //PSSHAR.HS
   val psshar_lanes = VecInit((0 until 2).map { i =>
     val h = rs1(16 * i + 15, 16 * i).asSInt
     val r = Wire(UInt(16.W))
-    when(sshamt < 0.S) {
-      val neg = (-sshamt).asUInt.min(16.U)
-      val shifted = (h >> neg).asSInt 
-      val round = Mux(neg > 0.U, (h >> (neg - 1.U))(0), 0.U)
-      r := (shifted + round.asSInt)(15, 0)
+    when(shamt_neg) {
+      val mag = shamt_mag.min(16.U)
+      when(mag === 0.U) {
+        r := h(15, 0)
+      }.otherwise {
+        val shifted = (h >> mag).asSInt
+        val round = (h >> (mag - 1.U))(0) // LSB just below cut
+        r := (shifted + round.asSInt)(15, 0)
+      }
     }.otherwise {
-      r := clipS16((h.pad(32) << sshamt.asUInt).asSInt)
+      r := clipS16((h.pad(32) << shamt_mag).asSInt)
     }
     r
   })
   val psshar_result = psshar_lanes(1) ## psshar_lanes(0)
 
+  // PSSHL.HS: saturating unsigned shift, 2 × 16-bit
   val psshl_lanes = VecInit((0 until 2).map { i =>
-    val h = rs1(16 * i + 15, 16 * i)
+    val h = rs1(16 * i + 15, 16 * i) // unsigned 16-bit lane
     val r = Wire(UInt(16.W))
-    when(sshamt < 0.S) {
-      val neg = (-sshamt).asUInt
-      when(neg >= 16.U) { r := 0.U }
-        .otherwise { r := (h >> neg)(15, 0) }
+    when(shamt_neg) {
+      when(shamt_mag >= 16.U) { r := 0.U }
+        .otherwise { r := (h >> shamt_mag)(15, 0) }
     }.otherwise {
-      r := clipU16(h << sshamt.asUInt)
+      r := clipU16(h << shamt_mag)
     }
     r
   })
   val psshl_result = psshl_lanes(1) ## psshl_lanes(0)
 
-  
+  // PSSHLR.HS: saturating unsigned shift with rounding
   val psshlr_lanes = VecInit((0 until 2).map { i =>
     val h = rs1(16 * i + 15, 16 * i)
     val r = Wire(UInt(16.W))
-    when(sshamt < 0.S) {
-      val neg = (-sshamt).asUInt.min(16.U)
-      val shifted = h >> neg
-      val round = Mux(neg > 0.U, (h >> (neg - 1.U))(0), 0.U)
-      r := (shifted + round)(15, 0)
+    when(shamt_neg) {
+      val mag = shamt_mag.min(16.U)
+      when(mag === 0.U) {
+        r := h(15, 0)
+      }.otherwise {
+        val shifted = h >> mag
+        val round = (h >> (mag - 1.U))(0)
+        r := (shifted + round)(15, 0)
+      }
     }.otherwise {
-      r := clipU16(h << sshamt.asUInt)
+      r := clipU16(h << shamt_mag)
     }
     r
   })
   val psshlr_result = psshlr_lanes(1) ## psshlr_lanes(0)
 
   // PNCLIPI.B / PNCLIPRI.B
-  // {rs2, rs1} = 64-bit source, 4 × 16-bit lanes → clip to signed 8-bit
   val pnclipi_b_lanes = VecInit((0 until 4).map { i =>
     val word = if (i < 2) rs1 else rs2
     val h = word(16 * (i % 2) + 15, 16 * (i % 2)).asSInt
@@ -151,21 +176,24 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
   val pnclipri_b_result = pnclipri_b_lanes(3) ## pnclipri_b_lanes(2) ##
     pnclipri_b_lanes(1) ## pnclipri_b_lanes(0)
 
-  //PNCLIPI.H / PNCLIPRI.H
-  // {rs2, rs1} = 64-bit source, 2 × 32-bit lanes → clip to signed 16-bit
-  val pnclipi_h_lanes = VecInit((0 until 2).map { i =>
-    val w = (if (i == 0) rs1 else rs2).asSInt
-    clipS16((w >> shamt_i5).asSInt)
-  })
-  val pnclipi_h_result = pnclipi_h_lanes(1) ## pnclipi_h_lanes(0)
+  // PNCLIPI.H / PNCLIPRI.H
+  val pnclipi_h_lane0 = clipS16((rs1.asSInt >> shamt_i5).asSInt)
+  val pnclipi_h_lane1 = clipS16((rs2.asSInt >> shamt_i5).asSInt)
+  val pnclipi_h_result = pnclipi_h_lane1 ## pnclipi_h_lane0
 
-  val pnclipri_h_lanes = VecInit((0 until 2).map { i =>
-    val w = (if (i == 0) rs1 else rs2).asSInt
+  val pnclipri_h_lane0 = {
+    val w = rs1.asSInt
     val shifted = (w >> shamt_i5).asSInt
     val round = Mux(shamt_i5 > 0.U, (w >> (shamt_i5 - 1.U))(0), 0.U)
     clipS16((shifted + round.asSInt).asSInt)
-  })
-  val pnclipri_h_result = pnclipri_h_lanes(1) ## pnclipri_h_lanes(0)
+  }
+  val pnclipri_h_lane1 = {
+    val w = rs2.asSInt
+    val shifted = (w >> shamt_i5).asSInt
+    val round = Mux(shamt_i5 > 0.U, (w >> (shamt_i5 - 1.U))(0), 0.U)
+    clipS16((shifted + round.asSInt).asSInt)
+  }
+  val pnclipri_h_result = pnclipri_h_lane1 ## pnclipri_h_lane0
 
   // PM2ADD family
   def s16(x: UInt): SInt = x(15, 0).asSInt.pad(64)
@@ -178,7 +206,6 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
   val pm2addsu_h_result = (s16(lo1) * u16(lo2) + s16(hi1) * u16(hi2))(31, 0)
   val pm2addu_h_result = (u16(lo1) * u16(lo2) + u16(hi1) * u16(hi2))(31, 0)
   val pm2add_hx_result = (s16(lo1) * s16(hi2) + s16(hi1) * s16(lo2))(31, 0)
-
   val pm2sadd_h_result = clipS32(
     (s16(lo1) * s16(lo2) + s16(hi1) * s16(hi2)).asSInt
   )
@@ -186,9 +213,7 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
     (s16(lo1) * s16(hi2) + s16(hi1) * s16(lo2)).asSInt
   )
 
-  // Cycle 1: read rd (via rs1 port) + rs2, stall
-  // Cycle 2: read rs1 (via rs1 port), compute rd_prev + dot, write back
-
+  // PM2ADDA family: 2-cycle
   val adda_cycle2 = RegInit(false.B)
   val adda_rd_saved = RegInit(0.U(32.W))
   val adda_rs2_saved = RegInit(0.U(32.W))
@@ -212,19 +237,18 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
     ).map(_.asUInt)
   ).contains(io.instr_type.asUInt)
 
-  // Use saved rs1 (read in cycle 2) and saved rs2 for adda dot
-  val adda_rs1 = io_reg.reg_read_data1 // in cycle 2, rs1 port reads actual rs1
-  val adda_lo1 = adda_rs1(15, 0); val adda_hi1 = adda_rs1(31, 16)
-  val adda_lo2 = adda_rs2_saved(15, 0); val adda_hi2 = adda_rs2_saved(31, 16)
+  val c2_rs1 = io_reg.reg_read_data1
+  val c2_lo1 = c2_rs1(15, 0); val c2_hi1 = c2_rs1(31, 16)
+  val c2_lo2 = adda_rs2_saved(15, 0); val c2_hi2 = adda_rs2_saved(31, 16)
 
   val adda_dot_ss =
-    (s16(adda_lo1) * s16(adda_lo2) + s16(adda_hi1) * s16(adda_hi2))(31, 0)
+    (s16(c2_lo1) * s16(c2_lo2) + s16(c2_hi1) * s16(c2_hi2))(31, 0)
   val adda_dot_su =
-    (s16(adda_lo1) * u16(adda_lo2) + s16(adda_hi1) * u16(adda_hi2))(31, 0)
+    (s16(c2_lo1) * u16(c2_lo2) + s16(c2_hi1) * u16(c2_hi2))(31, 0)
   val adda_dot_uu =
-    (u16(adda_lo1) * u16(adda_lo2) + u16(adda_hi1) * u16(adda_hi2))(31, 0)
+    (u16(c2_lo1) * u16(c2_lo2) + u16(c2_hi1) * u16(c2_hi2))(31, 0)
   val adda_dot_sx =
-    (s16(adda_lo1) * s16(adda_hi2) + s16(adda_hi1) * s16(adda_lo2))(31, 0)
+    (s16(c2_lo1) * s16(c2_hi2) + s16(c2_hi1) * s16(c2_lo2))(31, 0)
 
   val adda_dot = MuxLookup(adda_type_reg.asUInt, adda_dot_ss)(
     Seq(
@@ -234,13 +258,11 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
       RISCV_TYPE.pm2adda_hx.asUInt -> adda_dot_sx
     )
   )
-
   val adda_result = (adda_rd_saved + adda_dot)(31, 0)
 
-  // Main dispatch
+  // Dispatch
   when(io.valid) {
     when(adda_cycle2) {
-      // Cycle 2: rs1 port reads actual rs1 (set by default above)
       io_reg.reg_rs1 := adda_instr_reg(19, 15)
       io_reg.reg_rs2 := adda_instr_reg(24, 20)
       io_reg.reg_rd := adda_instr_reg(11, 7)
@@ -252,8 +274,7 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
       adda_cycle2 := false.B
 
     }.elsewhen(is_pm2adda) {
-      // Cycle 1: read rd via rs1 port, rs2 normally
-      io_reg.reg_rs1 := io.instr(11, 7) // rd index → rs1 port
+      io_reg.reg_rs1 := io.instr(11, 7)
       io_reg.reg_rs2 := io.instr(24, 20)
       adda_rd_saved := io_reg.reg_read_data1
       adda_rs2_saved := io_reg.reg_read_data2
@@ -264,9 +285,7 @@ class ComplexPackedUnit extends AbstractExecutionUnit {
       adda_cycle2 := true.B
 
     }.otherwise {
-      io_reg.reg_rs1 := io.instr(19, 15)
-      io_reg.reg_rs2 := io.instr(24, 20)
-      io_reg.reg_rd := io.instr(11, 7)
+      // Base register logic is handled statically above; defaults apply here safely
       io_reg.reg_write_en := true.B
       io_pc.pc_we := true.B
       io_pc.pc_wdata := io_pc.pc + 4.U
