@@ -70,5 +70,37 @@ class Decoder extends AbstractDecoder {
         25
       ) ## io_decoder.instr(11, 7)
     }
+    is(RISCV_OP.JAL) {
+      io_decoder.rs1 := 0.U
+      io_decoder.rs2 := 0.U
+      io_decoder.rd := RD
+      io_decoder.imm :=
+        Fill(11, io_decoder.instr(31)) ## // sign-extend [31:21]
+          io_decoder.instr(31) ## // imm[20]
+          io_decoder.instr(19, 12) ## // imm[19:12]
+          io_decoder.instr(20) ## // imm[11]
+          io_decoder.instr(30, 21) ## // imm[10:1]
+          0.U(1.W) // imm[0] always 0
+    }
+    is(RISCV_OP.JALR) {
+      io_decoder.rs1 := RS1
+      io_decoder.rs2 := 0.U
+      io_decoder.rd := RD
+      // I-type immediate: sign-extend bits [31:20]
+      io_decoder.imm := Fill(20, io_decoder.instr(31)) ## io_decoder.instr(
+        31,
+        20
+      )
+    }
+    is(RISCV_OP.LOAD) {
+      io_decoder.rs1 := RS1
+      io_decoder.rs2 := 0.U
+      io_decoder.rd := RD
+      // I-type immediate: same as JALR / OP_IMM
+      io_decoder.imm := Fill(20, io_decoder.instr(31)) ## io_decoder.instr(
+        31,
+        20
+      )
+    }
   }
 }

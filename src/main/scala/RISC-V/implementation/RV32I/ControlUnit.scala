@@ -32,6 +32,15 @@ class ControlUnit extends AbstractControlUnit {
   when(was_stalled === STALL_REASON.EXECUTION_UNIT) {
     when(io_ctrl.data_gnt) {
       stalled := STALL_REASON.NO_STALL
+      // For LOAD: enable register write on the cycle gnt arrives
+      when(RISCV_TYPE.getOP(io_ctrl.instr_type) === RISCV_OP.LOAD) {
+        io_ctrl.reg_we := true.B
+        io_ctrl.reg_write_sel := Mux(
+          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2),
+          REG_WRITE_SEL.MEM_OUT_ZERO_EXTENDED,
+          REG_WRITE_SEL.MEM_OUT_SIGN_EXTENDED
+        )
+      }
     }
   }.otherwise {
     switch(RISCV_TYPE.getOP(io_ctrl.instr_type)) {
@@ -100,6 +109,48 @@ class ControlUnit extends AbstractControlUnit {
         ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
           1.W
         )
+      }
+      is(RISCV_OP.JAL) {
+        stalled := STALL_REASON.NO_STALL
+        io_ctrl.reg_we := true.B
+        io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
+        io_ctrl.alu_control := ALU_CONTROL.ADD
+        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.PC // target = PC + imm
+        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+        io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED
+      }
+      is(RISCV_OP.JALR) {
+        stalled := STALL_REASON.NO_STALL
+        io_ctrl.reg_we := true.B
+        io_ctrl.reg_write_sel := REG_WRITE_SEL.PC_PLUS_4 // rd = PC + 4
+        io_ctrl.alu_control := ALU_CONTROL.ADD
+        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1 // target = rs1 + imm
+        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+        io_ctrl.next_pc_select := NEXT_PC_SELECT.ALU_OUT_ALIGNED // force bit 0 = 0
+      }
+      is(RISCV_OP.LOAD) {
+        // Address = rs1 + imm  (ALU computes it)
+        io_ctrl.alu_control := ALU_CONTROL.ADD
+        io_ctrl.alu_op_1_sel := ALU_OP_1_SEL.RS1
+        io_ctrl.alu_op_2_sel := ALU_OP_2_SEL.IMM
+        io_ctrl.reg_we := false.B // will be set after gnt
+        io_ctrl.data_req := true.B
+        io_ctrl.data_we := false.B
+        // be mask from funct3: lb=0001, lh=0011, lw=1111, lbu=0001, lhu=0011
+        io_ctrl.data_be := Fill(
+          2,
+          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1)
+        ) ## RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(1, 0).orR ## 1.U(
+          1.W
+        )
+        // funct3 bit[2] = 1 means unsigned (lbu=100, lhu=101)
+        io_ctrl.reg_write_sel := Mux(
+          RISCV_TYPE.getFunct3(io_ctrl.instr_type).asUInt(2),
+          REG_WRITE_SEL.MEM_OUT_ZERO_EXTENDED,
+          REG_WRITE_SEL.MEM_OUT_SIGN_EXTENDED
+        )
+        io_ctrl.next_pc_select := NEXT_PC_SELECT.PC_PLUS_4
+        stalled := STALL_REASON.EXECUTION_UNIT
       }
     }
   }

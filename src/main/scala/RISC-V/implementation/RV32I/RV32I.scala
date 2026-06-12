@@ -50,6 +50,12 @@ class RV32I(
         (io_pc.pc + 4.U)
       )
     }
+    is(NEXT_PC_SELECT.ALU_OUT_ALIGNED) {
+      io_pc.pc_wdata := alu.io_alu.result & "hFFFFFFFE".U
+    }
+    is(NEXT_PC_SELECT.IMM) {
+      io_pc.pc_wdata := decoder.io_decoder.imm
+    }
   }
   io_pc.pc_we := control_unit.io_ctrl.stall === STALL_REASON.NO_STALL
 
@@ -68,6 +74,31 @@ class RV32I(
     }
     is(REG_WRITE_SEL.PC_PLUS_4) {
       io_reg.reg_write_data := io_pc.pc + 4.U
+    }
+    // funct3 bits[1:0] tell us the width: 00=byte, 01=half, 10=word
+    is(REG_WRITE_SEL.MEM_OUT_SIGN_EXTENDED) {
+      io_reg.reg_write_data := MuxLookup(
+        RISCV_TYPE.getFunct3(instr_type).asUInt(1, 0),
+        io_data.data_rdata
+      )(
+        Seq(
+          "b00".U -> io_data.data_rdata(7, 0).asSInt.pad(32).asUInt, // lb
+          "b01".U -> io_data.data_rdata(15, 0).asSInt.pad(32).asUInt, // lh
+          "b10".U -> io_data.data_rdata // lw (full word)
+        )
+      )
+    }
+    // lbu / lhu — zero extend (just mask, no sign)
+    is(REG_WRITE_SEL.MEM_OUT_ZERO_EXTENDED) {
+      io_reg.reg_write_data := MuxLookup(
+        RISCV_TYPE.getFunct3(instr_type).asUInt(1, 0),
+        io_data.data_rdata
+      )(
+        Seq(
+          "b00".U -> io_data.data_rdata(7, 0), // lbu: zero-extend byte
+          "b01".U -> io_data.data_rdata(15, 0) // lhu: zero-extend halfword
+        )
+      )
     }
   }
 
@@ -115,5 +146,12 @@ class RV32I(
       io_trap.trap_valid := branch_unit.io_branch.branch_taken && ((io_pc.pc + decoder.io_decoder.imm) & "h00000003".U) =/= 0.U // Raise an exception if either the LSB or the second bit is set
       io_trap.trap_reason := TRAP_REASON.INSTRUCTION_ADDRESS_MISALIGNED
     }
+    // target after forcing bit 0 = 0; misaligned if bit 1 is still set
+    is(NEXT_PC_SELECT.ALU_OUT_ALIGNED) {
+      val target = alu.io_alu.result & "hFFFFFFFE".U
+      io_trap.trap_valid := (target & "h00000002".U) =/= 0.U
+      io_trap.trap_reason := TRAP_REASON.INSTRUCTION_ADDRESS_MISALIGNED
+    }
   }
 }
+
